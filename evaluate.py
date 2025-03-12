@@ -79,11 +79,11 @@ def validate_chairs(model, iters=24):
     epe_list = []
 
     val_dataset = datasets.FlyingChairs(split='validation')
+    print(len(val_dataset))
     for val_id in range(len(val_dataset)):
         image1, image2, flow_gt, _ = val_dataset[val_id]
         image1 = image1[None].cuda()
         image2 = image2[None].cuda()
-
         _, flow_pr = model(image1, image2, iters=iters, test_mode=True)
         epe = torch.sum((flow_pr[0].cpu() - flow_gt) ** 2, dim=0).sqrt()
         epe_list.append(epe.view(-1).numpy())
@@ -101,7 +101,7 @@ def validate_sintel(model, iters=32):
     for dstype in ['clean', 'final']:
         val_dataset = datasets.MpiSintel(split='training', dstype=dstype)
         epe_list = []
-
+        # print(len(val_dataset))
         for val_id in range(len(val_dataset)):
             image1, image2, flow_gt, _ = val_dataset[val_id]
             image1 = image1[None].cuda()
@@ -135,6 +135,7 @@ def validate_kitti(model, iters=24):
     val_dataset = datasets.KITTI(split='training')
 
     out_list, epe_list = [], []
+    # print(len(val_dataset))
     for val_id in range(len(val_dataset)):
         image1, image2, flow_gt, valid_gt = val_dataset[val_id]
         image1 = image1[None].cuda()
@@ -174,10 +175,16 @@ if __name__ == '__main__':
     parser.add_argument('--small', action='store_true', help='use small model')
     parser.add_argument('--mixed_precision', action='store_true', help='use mixed precision')
     parser.add_argument('--alternate_corr', action='store_true', help='use efficent correlation implementation')
+    parser.add_argument('--num_heads', default=1, type=int, help='number of heads in attention and aggregation')
+    parser.add_argument('--position_only', default=False, action='store_true', help='only use position-wise attention')
+    parser.add_argument('--position_and_content', default=False, action='store_true',
+                        help='use position and content-wise attention')
     args = parser.parse_args()
 
     model = torch.nn.DataParallel(APCAFlow(args))
     model.load_state_dict(torch.load(args.model))
+    # print(model)
+    print(args)
 
     model.cuda()
     model.eval()

@@ -1,5 +1,5 @@
 #!/bin/bash
-mkdir -p checkpoints
+# mkdir -p checkpoints
 CUDA_VISIBLE_DEVICES=0,1 python train_flow.py --name raft-things \
 									                            --stage things \
 									                            --validation sintel \

@@ -18,6 +18,7 @@ import evaluate
 import core.datasets as datasets
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+import json
 
 try:
     from torch.cuda.amp import GradScaler
@@ -115,12 +116,19 @@ class Logger:
         for key in results:
             self.writer.add_scalar(key, results[key], self.total_steps)
 
+    def log_dir(self):
+        if self.writer is None:
+            self.writer = SummaryWriter()
+        return self.writer.log_dir
+    
     def close(self):
         self.writer.close()
 
 
 def train(args):
-    model = nn.DataParallel(APCAFlow(args))
+    model = nn.DataParallel(APCAFlow(args), device_ids=[0, 1])
+    print(model)
+    print(args)
     print("Parameter Count: %d" % count_parameters(model))
     if args.restore_ckpt is not None:
         model.load_state_dict(torch.load(args.restore_ckpt), strict=False)
@@ -133,6 +141,10 @@ def train(args):
     total_steps = 0
     scaler = GradScaler(enabled=args.mixed_precision)
     logger = Logger(model, scheduler)
+    args_file_path = os.path.join(logger.log_dir(), "args.json")
+    with open(args_file_path, "w") as f:
+        json.dump(vars(args), f, indent=4)
+    f.close()
     add_noise = True
     should_keep_training = True
     while should_keep_training:
@@ -153,7 +165,7 @@ def train(args):
             scaler.update()
             logger.push(metrics)
             if total_steps % VAL_FREQ == VAL_FREQ - 1:
-                PATH = args.outpath + '/%d_%s.pth' % (total_steps + 1, args.name)
+                PATH = 'checkpoints/' + args.outpath + '/%d_%s.pth' % (total_steps+1, args.name)
                 torch.save(model.state_dict(), PATH)
                 results = {}
                 for val_dataset in args.validation:
@@ -173,7 +185,7 @@ def train(args):
                 should_keep_training = False
                 break
     logger.close()
-    PATH = args.outpath + '/%s.pth' % args.name
+    PATH = 'checkpoints/' + args.outpath + '/%s.pth' % args.name
     torch.save(model.state_dict(), PATH)
     return PATH
 
@@ -211,7 +223,8 @@ if __name__ == '__main__':
     torch.manual_seed(1234)
     np.random.seed(1234)
 
-    if not os.path.isdir(args.outpath):
-        os.mkdir(args.outpath)
-
+    if not os.path.isdir('checkpoints/' + args.outpath):
+        os.mkdir('checkpoints/' + args.outpath)
+    
+    os.environ["CUDA_VISIBLE_DEVICES"] = "%d,%d" % (args.gpus[0], args.gpus[1])
     train(args)

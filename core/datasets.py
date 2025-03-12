@@ -89,7 +89,7 @@ class FlowDataset(data.Dataset):
 
 
 class MpiSintel(FlowDataset):
-    def __init__(self, aug_params=None, split='training', root='/data/fmj/dataset/Flow_dataset/MPI-Sintel-complete/', dstype='clean'):
+    def __init__(self, aug_params=None, split='training', root='/data/changyp/datasets/optical_flow/MPI-Sintel-complete', dstype='clean'):
         super(MpiSintel, self).__init__(aug_params)
         flow_root = osp.join(root, split, 'flow')
         image_root = osp.join(root, split, dstype)
@@ -105,7 +105,7 @@ class MpiSintel(FlowDataset):
 
 
 class FlyingChairs(FlowDataset):
-    def __init__(self, aug_params=None, split='train', root='/data/fmj/dataset/Flow_dataset/FlyingChairs_release/data/'):
+    def __init__(self, aug_params=None, split='train', root='/data/changyp/datasets/optical_flow/FlyingChairs_release/data'):
         super(FlyingChairs, self).__init__(aug_params)
         images = sorted(glob(osp.join(root, '*.ppm')))
         flows = sorted(glob(osp.join(root, '*.flo')))
@@ -119,7 +119,7 @@ class FlyingChairs(FlowDataset):
 
 
 class FlyingThings3D(FlowDataset):
-    def __init__(self, aug_params=None, root='/data/fmj/dataset/Flow_dataset/Flyingthings/', dstype='frames_cleanpass'):
+    def __init__(self, aug_params=None, root='/data/changyp/datasets/optical_flow/FlyingThings3D', dstype='frames_cleanpass'):
         super(FlyingThings3D, self).__init__(aug_params)
         for cam in ['left']:
             for direction in ['into_future', 'into_past']:
@@ -140,7 +140,7 @@ class FlyingThings3D(FlowDataset):
 
 
 class KITTI(FlowDataset):
-    def __init__(self, aug_params=None, split='training', root='/data/fmj/dataset/Flow_dataset/Kitti2015/'):
+    def __init__(self, aug_params=None, split='training', root='/data/changyp/datasets/optical_flow/KITTI'):
         super(KITTI, self).__init__(aug_params, sparse=True)
         if split == 'testing':
             self.is_test = True
@@ -172,7 +172,7 @@ class KITTI_12(FlowDataset):
 
 
 class HD1K(FlowDataset):
-    def __init__(self, aug_params=None, root='/data/fmj/dataset/Flow_dataset/hd1k_full_package/'):
+    def __init__(self, aug_params=None, root='/data/changyp/datasets/optical_flow/HD1k'):
         super(HD1K, self).__init__(aug_params, sparse=True)
         seq_ix = 0
         while 1:

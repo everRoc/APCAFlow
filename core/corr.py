@@ -31,7 +31,7 @@ class CorrBlock:
         corr_64 = cost_volume_64.unsqueeze(dim=3)
         batch, h1, w1, dim, h2, w2 = corr_64.shape
         corr_64 = corr_64.reshape(batch * h1 * w1, dim, h2, w2)
-        self.corr_pyramid.append(corr_64)
+        self.corr_pyramid.append(corr_64.float())
 
     def __call__(self, coords):
         r = self.radius
@@ -47,7 +47,7 @@ class CorrBlock:
             delta_lvl = delta.view(1, 2 * r + 1, 2 * r + 1, 2)
             coords_lvl = centroid_lvl + delta_lvl
             # print(corr.shape, coords_lvl.shape)
-            corr = bilinear_sampler(corr, coords_lvl)
+            corr = bilinear_sampler(corr.float(), coords_lvl)
             corr = corr.view(batch, h1, w1, -1)
             out_pyramid.append(corr)
         out = torch.cat(out_pyramid, dim=-1)
