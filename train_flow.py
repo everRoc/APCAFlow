@@ -93,7 +93,7 @@ class Logger:
         training_str = "[{:6d}, {:10.7f}] ".format(self.total_steps + 1, self.scheduler.get_last_lr()[0])
         metrics_str = ("{:10.4f}, " * len(metrics_data)).format(*metrics_data)
         # print the training status
-        # print(training_str + metrics_str)
+        print(training_str + metrics_str)
         if self.writer is None:
             self.writer = SummaryWriter()
         for k in self.running_loss:
@@ -148,7 +148,7 @@ def train(args):
     add_noise = True
     should_keep_training = True
     while should_keep_training:
-        for i_batch, data_blob in enumerate(tqdm(train_loader)):
+        for i_batch, data_blob in enumerate(train_loader):
             optimizer.zero_grad()
             image1, image2, flow, valid = [x.cuda() for x in data_blob]
             if args.add_noise:
@@ -218,6 +218,9 @@ if __name__ == '__main__':
     parser.add_argument('--dropout', type=float, default=0.0)
     parser.add_argument('--gamma', type=float, default=0.8, help='exponential weighting')
     parser.add_argument('--add_noise', action='store_true')
+
+    parser.add_argument('--twins', action='store_true')
+    parser.add_argument('--gma', action='store_true')
     args = parser.parse_args()
 
     torch.manual_seed(1234)

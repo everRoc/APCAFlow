@@ -47,13 +47,18 @@ class APCAFlow(nn.Module):
             self.cnet = SmallEncoder(output_dim=hdim + cdim, norm_fn='none', dropout=args.dropout)
             self.update_block = SmallUpdateBlock(self.args, hidden_dim=hdim)
         else:
-            # self.fnet = BasicEncoder(output_dim=256, norm_fn='instance', dropout=args.dropout)
-            # self.cnet = BasicEncoder(output_dim=hdim + cdim, norm_fn='batch', dropout=args.dropout)
-            self.fnet = twins_svt_large()
-            self.cnet = twins_svt_large()
-            self.update_block = GMAUpdateBlock(self.args, hidden_dim=hdim)
+            if args.twins:
+                self.fnet = twins_svt_large()
+                self.cnet = twins_svt_large()
+            else:
+                self.fnet = BasicEncoder(output_dim=256, norm_fn='instance', dropout=args.dropout)
+                self.cnet = BasicEncoder(output_dim=hdim + cdim, norm_fn='batch', dropout=args.dropout)
+            if args.gma:
+                self.update_block = GMAUpdateBlock(self.args, hidden_dim=hdim)
+                self.att = Attention(args=self.args, dim=cdim, heads=self.args.num_heads, max_pos_size=160, dim_head=cdim)
+            else:
+                self.update_block = BasicUpdateBlock(self.args, hidden_dim=hdim)
         self.Gcorr_agg_block = Gcorr_agg()
-        self.att = Attention(args=self.args, dim=cdim, heads=self.args.num_heads, max_pos_size=160, dim_head=cdim)
 
     def freeze_bn(self):
         for m in self.modules():
@@ -137,7 +142,8 @@ class APCAFlow(nn.Module):
             net, inp = torch.split(cnet, [hdim, cdim], dim=1)
             net = torch.tanh(net)
             inp = torch.relu(inp)
-            attention = self.att(inp)
+            if self.args.gma:
+                attention = self.att(inp)
         # run the feature network
         with autocast(enabled=self.args.mixed_precision):
             # fmap1, fmap2 = self.fnet([image1, image2])
@@ -161,7 +167,10 @@ class APCAFlow(nn.Module):
             flow = coords1 - coords0
             with autocast(enabled=self.args.mixed_precision):
                 corr = corr_fn(coords1)  # index correlation volume
-                net, up_mask, delta_flow = self.update_block(net, inp, corr, flow, attention)
+                if self.args.gma:
+                    net, up_mask, delta_flow = self.update_block(net, inp, corr, flow, attention)
+                else:
+                    net, up_mask, delta_flow = self.update_block(net, inp, corr, flow)
             # F(t+1) = F(t) + \Delta(t)
             coords1 = coords1 + delta_flow
             # upsample predictions
