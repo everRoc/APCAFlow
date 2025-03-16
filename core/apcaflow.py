@@ -58,7 +58,7 @@ class APCAFlow(nn.Module):
                 self.att = Attention(args=self.args, dim=cdim, heads=self.args.num_heads, max_pos_size=160, dim_head=cdim)
             else:
                 self.update_block = BasicUpdateBlock(self.args, hidden_dim=hdim)
-        self.Gcorr_agg_block = Gcorr_agg()
+        self.Gcorr_agg_block = Gcorr_agg(sigmoid_attn=args.sigmoid_attn)
 
     def freeze_bn(self):
         for m in self.modules():

@@ -79,7 +79,7 @@ def validate_chairs(model, iters=24):
     epe_list = []
 
     val_dataset = datasets.FlyingChairs(split='validation')
-    print(len(val_dataset))
+    # print(len(val_dataset))
     for val_id in range(len(val_dataset)):
         image1, image2, flow_gt, _ = val_dataset[val_id]
         image1 = image1[None].cuda()
@@ -179,6 +179,9 @@ if __name__ == '__main__':
     parser.add_argument('--position_only', default=False, action='store_true', help='only use position-wise attention')
     parser.add_argument('--position_and_content', default=False, action='store_true',
                         help='use position and content-wise attention')
+    parser.add_argument('--twins', action='store_true')
+    parser.add_argument('--gma', action='store_true')
+    parser.add_argument('--sigmoid_attn', action='store_true')
     args = parser.parse_args()
 
     model = torch.nn.DataParallel(APCAFlow(args))
@@ -187,7 +190,6 @@ if __name__ == '__main__':
     print(args)
 
     model.cuda()
-    model.eval()
 
     # create_sintel_submission(model.module, warm_start=True)
     # create_kitti_submission(model.module)

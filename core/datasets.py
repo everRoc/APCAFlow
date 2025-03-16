@@ -156,7 +156,7 @@ class KITTI(FlowDataset):
 
 
 class KITTI_12(FlowDataset):
-    def __init__(self, aug_params=None, split='training', root='/data/fmj/dataset/Flow_dataset/Kitti2012/'):
+    def __init__(self, aug_params=None, split='training', root='/data/changyp/datasets/optical_flow/KITTI2'):
         super(KITTI_12, self).__init__(aug_params, sparse=True)
         if split == 'testing':
             self.is_test = True

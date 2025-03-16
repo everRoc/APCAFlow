@@ -201,9 +201,10 @@ class LayerNorm(nn.Module):
 
 
 class ConvLA(nn.Module):
-    def __init__(self, dim, use_norm=False):
+    def __init__(self, dim, use_norm=False, sigmoid_attn=False):
         super().__init__()
         self.use_norm = use_norm
+        self.sigmoid_attn = sigmoid_attn
         self.norm = LayerNorm(dim, eps=1e-6, data_format="channels_first")
         self.v = nn.Sequential(
             nn.Conv2d(dim, dim, 1),
@@ -211,6 +212,11 @@ class ConvLA(nn.Module):
             nn.Conv2d(dim, dim, 11, padding=5, groups=dim)
         )
         self.attn = nn.Conv2d(dim, dim, 1)
+        if sigmoid_attn:
+            self.attn = nn.Sequential(
+                nn.Conv2d(dim, dim//2, 1),
+                nn.GELU(),
+                nn.Conv2d(dim//2, dim, 1))
         self.proj = nn.Conv2d(dim, dim, 1)
 
     def forward(self, x):
@@ -218,18 +224,22 @@ class ConvLA(nn.Module):
         if self.use_norm:
             x = self.norm(x)
         v = self.v(x)
-        x = v * self.attn(x)
+        if self.sigmoid_attn:
+            x = v * torch.sigmoid(self.attn(x))
+        else:
+            x = x = v * self.attn(x)
+        
         x = self.proj(x)
         return x
 
 
 class Aggregation_Block(nn.Module):
-    def __init__(self, in_channels=64, mid_channels=128):
+    def __init__(self, in_channels=64, mid_channels=128, sigmoid_attn=False):
         super(Aggregation_Block, self).__init__()
         self.conv1 = nn.Sequential(
             nn.Conv2d(in_channels, mid_channels, kernel_size=1, stride=1, padding=0),
             nn.GELU(),
-            ConvLA(mid_channels),
+            ConvLA(mid_channels, sigmoid_attn=sigmoid_attn),
             nn.Conv2d(mid_channels, in_channels, kernel_size=1, stride=1, padding=0),
             nn.GELU()
         )
@@ -286,14 +296,14 @@ class InputPadder:
 
 
 class Gcorr_agg(nn.Module):
-    def __init__(self, patch_hight=8, patch_width=8):
+    def __init__(self, patch_hight=8, patch_width=8, sigmoid_attn=False):
         super(Gcorr_agg, self).__init__()
         self.patch_hight = patch_hight
         self.patch_width = patch_width
         self.corr_to_patch = nn.Sequential(
             Rearrange('b h1 w1 (h_num p1) (w_num p2) -> b (h_num w_num) (p1 p2) h1 w1', p1=patch_hight, p2=patch_width)
         )
-        self.agg_block = Aggregation_Block(in_channels=self.patch_hight * self.patch_width)
+        self.agg_block = Aggregation_Block(in_channels=self.patch_hight * self.patch_width, sigmoid_attn=sigmoid_attn)
         self.agg_block_global = Aggregation_Block_global(in_channels=self.patch_hight * self.patch_width)
 
     def forward(self, corr):
