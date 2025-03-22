@@ -249,6 +249,39 @@ class Aggregation_Block(nn.Module):
         return cost_volume
 
 
+class GlobalAttention(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+        self.scale = dim ** (-0.5)
+        self.q = nn.Linear(in_features=dim, out_features=dim)
+        self.k = nn.Linear(in_features=dim, out_features=dim)
+        self.v = nn.Linear(in_features=dim, out_features=dim)
+        self.softmax = nn.Softmax(dim=-1)
+        self.proj = nn.Linear(in_features=dim, out_features=dim)
+
+    def forward(self, fmap, mask=None):
+        """
+        :param fmap: B*h1*w1, h_p*w_p, p*p
+        :return:
+        """ 
+        # TODO: differentiate attn
+        shortcut = fmap
+        # B, H, W, C = fmap.shape
+        q = self.q(fmap)
+        k = self.k(fmap)
+        v = self.v(fmap)
+
+        # q, k, v = map(lambda x: x.reshape(B, H*W, C), [q, k, v])
+        q = q * self.scale
+        attn = q @ k.transpose(1, 2)
+        attn = self.softmax(attn)
+        x = attn @ v
+        x = self.proj(x)
+        
+        return x+shortcut
+
+
 class Aggregation_Block_global(nn.Module):
     def __init__(self, in_channels=64, a_in_chanels=1, a_mid_channels=4):
         super(Aggregation_Block_global, self).__init__()
@@ -275,6 +308,50 @@ class Aggregation_Block_global(nn.Module):
         return cost_volume_64
 
 
+class CrossScaleFusion(nn.Module):
+    def __init__(self, local_dim=64, global_dim=1, hidden_dim=64):
+        super().__init__()
+        # 全局特征升维
+        self.global_expand = nn.Sequential(
+            nn.Conv2d(global_dim, hidden_dim, 3, padding=1),
+            nn.GELU()
+        )
+        # 局部特征保持
+        self.local_norm = nn.InstanceNorm2d(local_dim)
+        # 动态融合门控
+        self.gate = nn.Sequential(
+            nn.Conv2d(local_dim + hidden_dim, local_dim, 1),
+            nn.GELU(),
+            nn.Conv2d(local_dim, local_dim, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, local_feat, global_feat):
+        """
+        输入: 
+            local_feat [batch*num_blocks, local_dim, h1, w1]
+            global_feat [batch, num_blocks, 1, h1, w1]
+        输出: [batch*num_blocks, local_dim, h1, w1]
+        """
+        batch, hnum, wnum, h, w = global_feat.shape
+        
+        # 全局特征展开并与局部对齐
+        global_feat = global_feat.view(batch*hnum*wnum, 1, h, w)  # [batch*num_blocks, 1, h, w]
+        global_feat = self.global_expand(global_feat)  # [batch*num_blocks, hidden_dim, h, w]
+        
+        # 局部特征归一化
+        # local_norm = self.local_norm(local_feat)  # [batch*num_blocks, local_dim, h, w]
+        
+        # 拼接特征生成门控
+        concat_feat = torch.cat([local_feat, global_feat], dim=1)  # [batch*num_blocks, local_dim+hidden_dim, h, w]
+        gate = self.gate(concat_feat)  # [batch*num_blocks, 1, h, w]
+        
+        # 残差式融合
+        fused_feat = local_feat * gate + global_feat * (1 - gate)
+        # fused_feat = local_feat * gate
+        return fused_feat
+
+
 class InputPadder:
     """ Pads images such that dimensions are divisible by 8 """
 
@@ -296,14 +373,21 @@ class InputPadder:
 
 
 class Gcorr_agg(nn.Module):
-    def __init__(self, patch_hight=8, patch_width=8, sigmoid_attn=False):
+    def __init__(self, patch_hight=8, patch_width=8, sigmoid_attn=False,
+                 cross_agg=False, cscale_agg=False):
         super(Gcorr_agg, self).__init__()
         self.patch_hight = patch_hight
         self.patch_width = patch_width
+        self.cross_agg = cross_agg
+        self.cscale_agg = cscale_agg
         self.corr_to_patch = nn.Sequential(
             Rearrange('b h1 w1 (h_num p1) (w_num p2) -> b (h_num w_num) (p1 p2) h1 w1', p1=patch_hight, p2=patch_width)
         )
         self.agg_block = Aggregation_Block(in_channels=self.patch_hight * self.patch_width, sigmoid_attn=sigmoid_attn)
+        if cross_agg:
+            self.cross_agg_block = GlobalAttention(dim=patch_hight*patch_width)
+        if cscale_agg:
+            self.cscale_agg_block = CrossScaleFusion()
         self.agg_block_global = Aggregation_Block_global(in_channels=self.patch_hight * self.patch_width)
 
     def forward(self, corr):
@@ -317,7 +401,16 @@ class Gcorr_agg(nn.Module):
         corr = self.corr_to_patch(corr)
         corr = corr.reshape(b * h_num * w_num, self.patch_hight * self.patch_width, h1, w1)
         corr = self.agg_block(corr)
+
+        if self.cross_agg:
+            corr = corr.view(b, h_num * w_num, self.patch_hight * self.patch_width, h1, w1)
+            corr = corr.permute(0, 3, 4, 1, 2).reshape(b*h1*w1, h_num*w_num, self.patch_hight*self.patch_width)
+            corr = self.cross_agg_block(corr).view(b, h1*w1, h_num*w_num, self.patch_hight*self.patch_width)
+            corr = corr.permute(0, 2, 3, 1).reshape(b * h_num * w_num, self.patch_hight*self.patch_width, h1, w1)
+
         corr_64 = self.agg_block_global(corr, b, h_num, w_num)
+        if self.cscale_agg:
+            corr = self.cscale_agg_block(corr, corr_64)
         corr_64 = corr_64.permute(0, 3, 4, 1, 2)
         corr = corr.reshape(b, h_num * w_num, self.patch_hight * self.patch_width, h1, w1)
         corr = corr.reshape(b, h_num, w_num, self.patch_hight, self.patch_width, h1, w1)

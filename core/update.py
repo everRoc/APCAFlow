@@ -164,3 +164,53 @@ class GMAUpdateBlock(nn.Module):
         # scale mask to balence gradients
         mask = .25 * self.mask(net)
         return net, mask, delta_flow
+
+
+class InitedStep(nn.Module):
+    def __init__(self, hidden_dim=128, input_dim=192+128):
+        super(InitedStep, self).__init__()
+        self.convq = nn.Conv2d(input_dim, hidden_dim, (5,5), padding=(2,2))
+
+    def forward(self, x):
+        h = torch.tanh(self.convq(x))
+        return h
+
+
+class UpSampleMask8(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.up_sample_mask = nn.Sequential(
+            nn.Conv2d(in_channels=dim, out_channels=256, kernel_size=3, padding=1, stride=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels=256, out_channels=64 * 9, kernel_size=1, stride=1)
+        )
+
+    def forward(self, data):
+        """
+        :param data:  B, C, H, W
+        :return:  batch, 8*8*9, H, W
+        """
+        mask = self.up_sample_mask(data)  # B, 64*6, H, W
+        return mask
+
+
+class MMAUpdateBlock(nn.Module):
+    def __init__(self, args, hidden_dim=128, input_dim=128):
+        super(MMAUpdateBlock, self).__init__()
+        self.args = args
+        self.encoder = BasicMotionEncoder(args)
+        self.first_gru = InitedStep(hidden_dim=hidden_dim, input_dim=128+input_dim)
+        self.gru = SepConvGRU(hidden_dim=hidden_dim, input_dim=128+input_dim)
+        self.flow_head = FlowHead(hidden_dim, hidden_dim=256)
+
+    def forward(self, net, inp, corr, flow, first_step=False):
+        motion_features = self.encoder(flow, corr)
+        inp = torch.cat([inp, motion_features], dim=1)
+
+        if first_step:
+            net = self.first_gru(inp)
+        else:
+            net = self.gru(net, inp)
+        delta_flow = self.flow_head(net)
+
+        return net, delta_flow

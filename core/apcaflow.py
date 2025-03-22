@@ -2,11 +2,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from core.update import BasicUpdateBlock, SmallUpdateBlock, GMAUpdateBlock
+from core.update import BasicUpdateBlock, SmallUpdateBlock, GMAUpdateBlock, MMAUpdateBlock, UpSampleMask8
 from core.extractor import BasicEncoder, SmallEncoder, twins_svt_large
 from core.corr import CorrBlock, AlternateCorrBlock, Gcorr_agg
 from core.utils.utils import bilinear_sampler, coords_grid, upflow8
 from core.gma import Attention
+from core.mma import MMA
 
 try:
     autocast = torch.cuda.amp.autocast
@@ -53,12 +54,17 @@ class APCAFlow(nn.Module):
             else:
                 self.fnet = BasicEncoder(output_dim=256, norm_fn='instance', dropout=args.dropout)
                 self.cnet = BasicEncoder(output_dim=hdim + cdim, norm_fn='batch', dropout=args.dropout)
+            
             if args.gma:
                 self.update_block = GMAUpdateBlock(self.args, hidden_dim=hdim)
                 self.att = Attention(args=self.args, dim=cdim, heads=self.args.num_heads, max_pos_size=160, dim_head=cdim)
+            elif args.mma:
+                self.mma = MMA(c_dim=cdim)
+                self.update_block = MMAUpdateBlock(self.args, hidden_dim=hdim)
+                self.up_mask8 = UpSampleMask8(cdim)
             else:
                 self.update_block = BasicUpdateBlock(self.args, hidden_dim=hdim)
-        self.Gcorr_agg_block = Gcorr_agg(sigmoid_attn=args.sigmoid_attn)
+        self.Gcorr_agg_block = Gcorr_agg(sigmoid_attn=args.sigmoid_attn, cross_agg=args.cross_agg, cscale_agg=args.cscale_agg)
 
     def freeze_bn(self):
         for m in self.modules():
@@ -159,9 +165,17 @@ class APCAFlow(nn.Module):
         else:
             corr_fn = CorrBlock(refine_cost_volume_8, refine_cost_volume_64, radius=self.args.corr_radius)
         coords0, coords1 = self.initialize_flow(image1)
+        flow_predictions = []
+        if self.args.mma:
+            flow_init = self.mma(fmap1, corr_fn.corr_pyramid, inp.float())
+            if not test_mode:
+                up_mask0 = self.up_mask8(net.float())
+                flow_up = self.upsample_flow(flow_init, up_mask0)
+                flow_predictions.append(flow_up)
+            
         if flow_init is not None:
             coords1 = coords1 + flow_init
-        flow_predictions = []
+        
         for itr in range(iters):
             coords1 = coords1.detach()
             flow = coords1 - coords0
@@ -169,8 +183,14 @@ class APCAFlow(nn.Module):
                 corr = corr_fn(coords1)  # index correlation volume
                 if self.args.gma:
                     net, up_mask, delta_flow = self.update_block(net, inp, corr, flow, attention)
+                elif self.args.mma:
+                    first_step = False if itr != 0 else True
+                    net, delta_flow = self.update_block(net, inp, corr, flow, first_step=first_step)
                 else:
                     net, up_mask, delta_flow = self.update_block(net, inp, corr, flow)
+            if self.args.mma:
+                up_mask = self.up_mask8(net.float())
+            
             # F(t+1) = F(t) + \Delta(t)
             coords1 = coords1 + delta_flow
             # upsample predictions

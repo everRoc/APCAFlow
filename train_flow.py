@@ -131,6 +131,7 @@ def train(args):
     print(args)
     print("Parameter Count: %d" % count_parameters(model))
     if args.restore_ckpt is not None:
+        print(args.restore_ckpt)
         model.load_state_dict(torch.load(args.restore_ckpt), strict=False)
     model.cuda()
     model.train()
@@ -147,6 +148,7 @@ def train(args):
     f.close()
     add_noise = True
     should_keep_training = True
+    VAL_FREQ = 10000
     while should_keep_training:
         for i_batch, data_blob in enumerate(train_loader):
             optimizer.zero_grad()
@@ -184,6 +186,8 @@ def train(args):
             if total_steps > args.num_steps:
                 should_keep_training = False
                 break
+            elif total_steps > 0.8 * args.num_steps:
+                VAL_FREQ = 5000
     logger.close()
     PATH = 'checkpoints/' + args.outpath + '/%s.pth' % args.name
     torch.save(model.state_dict(), PATH)
@@ -222,6 +226,10 @@ if __name__ == '__main__':
     parser.add_argument('--twins', action='store_true')
     parser.add_argument('--gma', action='store_true')
     parser.add_argument('--sigmoid_attn', action='store_true')
+    parser.add_argument('--cross_agg', action='store_true')
+    parser.add_argument('--cscale_agg', action='store_true')
+
+    parser.add_argument('--mma', action='store_true')
     args = parser.parse_args()
 
     torch.manual_seed(1234)
