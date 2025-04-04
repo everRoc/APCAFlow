@@ -7,7 +7,7 @@ from core.extractor import BasicEncoder, SmallEncoder, twins_svt_large
 from core.corr import CorrBlock, AlternateCorrBlock, Gcorr_agg
 from core.utils.utils import bilinear_sampler, coords_grid, upflow8
 from core.gma import Attention
-from core.mma import MMA
+from core.mma import MMA, MultiFlowFusion
 
 try:
     autocast = torch.cuda.amp.autocast
@@ -59,12 +59,14 @@ class APCAFlow(nn.Module):
                 self.update_block = GMAUpdateBlock(self.args, hidden_dim=hdim)
                 self.att = Attention(args=self.args, dim=cdim, heads=self.args.num_heads, max_pos_size=160, dim_head=cdim)
             elif args.mma:
-                self.mma = MMA(c_dim=cdim)
+                self.mma = MMA(c_dim=cdim, matchmask=args.matchmask, nomask=args.nomask)
                 self.update_block = MMAUpdateBlock(self.args, hidden_dim=hdim)
                 self.up_mask8 = UpSampleMask8(cdim)
             else:
                 self.update_block = BasicUpdateBlock(self.args, hidden_dim=hdim)
         self.Gcorr_agg_block = Gcorr_agg(sigmoid_attn=args.sigmoid_attn, cross_agg=args.cross_agg, cscale_agg=args.cscale_agg)
+        if args.mff:
+            self.flowfusion = MultiFlowFusion(cdim)
 
     def freeze_bn(self):
         for m in self.modules():
@@ -166,13 +168,31 @@ class APCAFlow(nn.Module):
             corr_fn = CorrBlock(refine_cost_volume_8, refine_cost_volume_64, radius=self.args.corr_radius)
         coords0, coords1 = self.initialize_flow(image1)
         flow_predictions = []
-        if self.args.mma:
-            flow_init = self.mma(fmap1, corr_fn.corr_pyramid, inp.float())
-            if not test_mode:
-                up_mask0 = self.up_mask8(net.float())
-                flow_up = self.upsample_flow(flow_init, up_mask0)
-                flow_predictions.append(flow_up)
-            
+        init_flow_preds = []
+        with autocast(enabled=self.args.mixed_precision):
+            if self.args.mma:
+                flow_init, init_flows = self.mma(fmap1, corr_fn.corr_pyramid, inp)
+                if not test_mode:
+                    up_mask0 = self.up_mask8(net)
+                    if self.args.nomask:
+                        flow_predictions.append(upflow8(init_flows[0]))
+                        flow_predictions.append(upflow8(init_flows[1]))
+                    flow_up = self.upsample_flow(flow_init, up_mask0)
+                    flow_predictions.append(flow_up)
+                    for flow in init_flows:
+                        init_flow_preds.append(upflow8(flow))
+                    init_flow_preds.append(flow_up)
+
+            elif self.args.mff:
+                flow_init, init_flows = self.flowfusion(corr_fn.corr_pyramid, inp)
+                if not test_mode:
+                    flow_up = upflow8(init_flows[-2])
+                    flow_predictions.append(flow_up)
+                    flow_up = upflow8(flow_init)
+                    flow_predictions.append(flow_up) # TODO: smooth L1 loss
+                    for flow in init_flows:
+                        init_flow_preds.append(upflow8(flow))
+                    init_flow_preds.append(flow_up)
         if flow_init is not None:
             coords1 = coords1 + flow_init
         
@@ -201,4 +221,4 @@ class APCAFlow(nn.Module):
             flow_predictions.append(flow_up)
         if test_mode:
             return coords1 - coords0, flow_up
-        return flow_predictions
+        return flow_predictions, init_flow_preds

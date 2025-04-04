@@ -185,6 +185,10 @@ if __name__ == '__main__':
     parser.add_argument('--cross_agg', action='store_true')
     parser.add_argument('--cscale_agg', action='store_true')
 
+    parser.add_argument('--matchmask', action='store_true')
+    parser.add_argument('--mff', action='store_true')
+    parser.add_argument('--fuseflowloss', action='store_true')
+    parser.add_argument('--nomask', action='store_true')
     parser.add_argument('--mma', action='store_true')
     args = parser.parse_args()
 

@@ -12,10 +12,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+import torchvision
 from torch.utils.data import DataLoader
 from core.apcaflow import APCAFlow
 import evaluate
 import core.datasets as datasets
+from utils.flow_viz import flow_to_image
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import json
@@ -43,6 +45,7 @@ except:
 # exclude extremly large displacements
 MAX_FLOW = 400
 SUM_FREQ = 100
+VIS_FREQ = 100
 VAL_FREQ = 5000
 
 
@@ -67,6 +70,27 @@ def sequence_loss(flow_preds, flow_gt, valid, gamma=0.8, max_flow=MAX_FLOW):
     }
     return flow_loss, metrics
 
+def vis_heatmap(image, heatmap):
+    heatmap = heatmap[:, :, 0]
+    # heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min())
+    # heatmap = 1.0 - heatmap
+    heatmap = (heatmap * 255).astype(np.uint8)
+    h, w = heatmap.shape
+    mask = torch.from_numpy(heatmap).reshape(1, 1, h, w).repeat(1, 3, 1, 1).float().cuda()
+    colored_heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+    overlay = image * 0.3 + colored_heatmap * 0.7
+    overlay = torch.from_numpy(overlay).permute(2, 0, 1).unsqueeze(0).float().cuda()
+    return mask, overlay
+
+def vis_attn(image, score_map):
+    h, w, _ = image.shape
+    scoremap = 1. - score_map / score_map.max()
+    scoremap = F.interpolate(scoremap.unsqueeze(0), size=(h, w), mode='bilinear', align_corners=True).cpu().numpy()
+    scoremap = (scoremap[0][0] * 255).astype(np.uint8)
+    colored_scoremap = cv2.applyColorMap(scoremap, cv2.COLORMAP_JET)
+    overlay = image * 0.2 + colored_scoremap * 0.8
+    overlay = torch.from_numpy(overlay).permute(2, 0, 1).unsqueeze(0).float().cuda()
+    return overlay
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -116,6 +140,11 @@ class Logger:
         for key in results:
             self.writer.add_scalar(key, results[key], self.total_steps)
 
+    def write_grid(self, grid_list):
+        grid = torchvision.utils.make_grid(torch.cat(grid_list, dim=0), 
+                                           nrow=2)
+        self.writer.add_image('vis_grid', grid, self.total_steps)
+
     def log_dir(self):
         if self.writer is None:
             self.writer = SummaryWriter()
@@ -157,7 +186,7 @@ def train(args):
                 stdv = np.random.uniform(0.0, 5.0)
                 image1 = (image1 + stdv * torch.randn(*image1.shape).cuda()).clamp(0.0, 255.0)
                 image2 = (image2 + stdv * torch.randn(*image2.shape).cuda()).clamp(0.0, 255.0)
-            flow_predictions = model(image1, image2, iters=args.iters)
+            flow_predictions, init_flow_preds = model(image1, image2, iters=args.iters)
             loss, metrics = sequence_loss(flow_predictions, flow, valid, args.gamma)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -166,6 +195,20 @@ def train(args):
             scheduler.step()
             scaler.update()
             logger.push(metrics)
+            if (args.mff or args.mma) and total_steps % VIS_FREQ == VIS_FREQ - 1:
+                grid_list = [image1[0:1]/255.0, image2[0:1]/255.0]
+                for init_flow_pred in init_flow_preds:
+                    init_flow_vis = flow_to_image(init_flow_pred[0].detach().permute(1, 2, 0).cpu().numpy())
+                    # print(init_flow_vis)
+                    init_flow_vis = torch.from_numpy(init_flow_vis).permute(2, 0, 1).unsqueeze(0).float().cuda()
+                    grid_list += [init_flow_vis/255.0]
+                flow_pred = flow_predictions[-1].detach()
+                gt_vis = flow_to_image(flow[0].permute(1, 2, 0).cpu().numpy())
+                gt_vis = torch.from_numpy(gt_vis).permute(2, 0, 1).unsqueeze(0).float().cuda()
+                flow_vis = flow_to_image(flow_pred[0].permute(1, 2, 0).cpu().numpy())
+                flow_vis = torch.from_numpy(flow_vis).permute(2, 0, 1).unsqueeze(0).float().cuda()
+                grid_list += [flow_vis/255.0, gt_vis/255.0]
+                logger.write_grid(grid_list)
             if total_steps % VAL_FREQ == VAL_FREQ - 1:
                 PATH = 'checkpoints/' + args.outpath + '/%d_%s.pth' % (total_steps+1, args.name)
                 torch.save(model.state_dict(), PATH)
@@ -230,6 +273,10 @@ if __name__ == '__main__':
     parser.add_argument('--cscale_agg', action='store_true')
 
     parser.add_argument('--mma', action='store_true')
+    parser.add_argument('--matchmask', action='store_true')
+    parser.add_argument('--mff', action='store_true')
+    parser.add_argument('--fuseflowloss', action='store_true')
+    parser.add_argument('--nomask', action='store_true')
     args = parser.parse_args()
 
     torch.manual_seed(1234)
